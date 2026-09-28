@@ -1,7 +1,6 @@
-"""AquaMind — minimal Q-learning water network demo (FastAPI + static HTML)."""
+"""AquaMind — tabular Q-learning on Jowitt & Xu via WNTR (Negm 2024 setup)."""
 from __future__ import annotations
 
-import math
 import random
 from pathlib import Path
 
@@ -9,246 +8,128 @@ import numpy as np
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+from network_sim import (
+    BASELINE_SETTING,
+    CRITICAL_NODE,
+    SETPOINT_LEVELS,
+    decode_action,
+    network_topology,
+    run_episode,
+    snapshot,
+    step_reward,
+)
+
 ROOT = Path(__file__).resolve().parent
-HOURS = 720  # 30-day horizon for reporting
-TRAIN_HOURS = 168
-TRAIN_EPISODES = 120
-RES_CAPACITY = 100.0
-RES_INIT = 82.0
-CRITICAL_RES = 10.0
-OFFPEAK_PRESS_LIMIT = 25.0
-FAVAD_EXP = 1.18
+SEED = 42
+HOURS = 24
+N_STATES = 24  # hour of day
+N_ACTIONS = 27  # 3 PRV setpoints cubed
+TRAIN_EPISODES = 180
+SCENARIOS = ("background", "burst")
 
-ZONES = ["North", "Central", "Industrial", "Residential", "Hospital"]
-VALVE = np.array([0.35, 0.65, 0.95])
-BASE_K = np.array([0.018, 0.022, 0.020, 0.019, 0.015])
-ZONE_WEIGHT = np.array([1.0, 1.2, 1.4, 0.9, 0.55])
-HOSPITAL_IDX = 4
+# Negm (2024) Table 5-4 — Jowitt & Xu background leakage (p.131 / eprint Ch.5).
+NEGM_BACKGROUND = [
+    {"algorithm": "NM", "reward": 965.7, "water_saved_pct": 66.0, "violations": 49},
+    {"algorithm": "PSO", "reward": 994.5, "water_saved_pct": 65.9, "violations": 48},
+    {"algorithm": "DE", "reward": 995.2, "water_saved_pct": 65.9, "violations": 46},
+    {"algorithm": "ARS", "reward": 943.5, "water_saved_pct": 65.5, "violations": 78},
+    {"algorithm": "SAC", "reward": 975.0, "water_saved_pct": 64.2, "violations": 49},
+    {"algorithm": "TQC", "reward": 976.3, "water_saved_pct": 65.2, "violations": 50},
+    {"algorithm": "TRPO", "reward": 800.5, "water_saved_pct": 73.2, "violations": 264},
+    {"algorithm": "PPO", "reward": 780.0, "water_saved_pct": 73.4, "violations": 304},
+    {"algorithm": "Recurrent PPO", "reward": 798.4, "water_saved_pct": 73.4, "violations": 300},
+    {"algorithm": "DDPG", "reward": 525.0, "water_saved_pct": 44.1, "violations": 48},
+    {"algorithm": "A2C", "reward": 822.5, "water_saved_pct": 73.2, "violations": 300},
+]
 
-N_RES, N_TOD, N_DEM = 5, 6, 3
-N_STATES = N_RES * N_TOD * N_DEM
-N_ACTIONS = 9  # hospital valve (3) × other zones valve (3)
+# Negm (2024) Table 6-2 — Jowitt & Xu burst case (p.156 / eprint Ch.6); burst nodes 4, 9, 11.
+NEGM_BURST = [
+    {"algorithm": "NM", "reward": 6.791, "water_saved_pct": 12.68, "violations": 62},
+    {"algorithm": "PSO", "reward": 17.23, "water_saved_pct": 29.16, "violations": 112},
+    {"algorithm": "DE", "reward": 15.41, "water_saved_pct": 32.52, "violations": 203},
+    {"algorithm": "ARS", "reward": 41.79, "water_saved_pct": 47.62, "violations": 69},
+    {"algorithm": "SAC", "reward": 21.82, "water_saved_pct": 31.88, "violations": 126},
+    {"algorithm": "TQC", "reward": 24.26, "water_saved_pct": 43.16, "violations": 241},
+    {"algorithm": "TRPO", "reward": 33.29, "water_saved_pct": 47.01, "violations": 244},
+    {"algorithm": "PPO", "reward": 20.43, "water_saved_pct": 40.10, "violations": 339},
+    {"algorithm": "Recurrent PPO", "reward": 41.00, "water_saved_pct": 42.28, "violations": 58},
+    {"algorithm": "DDPG", "reward": 18.54, "water_saved_pct": 38.57, "violations": 293},
+    {"algorithm": "A2C", "reward": 42.15, "water_saved_pct": 58.46, "violations": 67},
+]
 
-SCENARIOS = {
-    "normal": {"inflow_mult": 1.0, "leak_zone": None, "leak_mult": 1.0},
-    "drought": {"inflow_mult": 0.58, "leak_zone": None, "leak_mult": 1.0},
-    "leak": {"inflow_mult": 1.0, "leak_zone": 2, "leak_mult": 3.2},
-}
-
-Q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
-BASELINE_VALVES = (2, 2)  # static high-aperture SCADA profile
-
-
-def demand_profile(hour: int) -> float:
-    t = hour % 24
-    base = 0.55 + 0.45 * math.sin((t - 6) * math.pi / 12) ** 2
-    morning = 0.35 * math.exp(-((t - 8) ** 2) / 8)
-    evening = 0.45 * math.exp(-((t - 19) ** 2) / 10)
-    return base + morning + evening
-
-
-def decode_action(a: int) -> tuple[int, int]:
-    return a // 3, a % 3
-
-
-def valve_vector(hosp_v: int, other_v: int) -> np.ndarray:
-    v = np.full(5, VALVE[other_v])
-    v[HOSPITAL_IDX] = VALVE[hosp_v]
-    return v
+Q_TABLES: dict[str, np.ndarray] = {}
+TRAIN_CURVES: dict[str, list[float]] = {}
 
 
-def discretize_state(res_level: float, hour: int, total_demand: float) -> int:
-    res_b = min(N_RES - 1, int(res_level / RES_CAPACITY * N_RES))
-    tod_b = min(N_TOD - 1, (hour % 24) // 4)
-    dem_b = 0 if total_demand < 2.8 else (1 if total_demand < 4.2 else 2)
-    return res_b * N_TOD * N_DEM + tod_b * N_DEM + dem_b
+def state_from_hour(hour: int, _base_snapshot: dict) -> int:
+    return hour % N_STATES
 
 
-def run_sim(
-    scenario: str,
-    policy: str,
-    hours: int = HOURS,
-    seed: int = 7,
-) -> dict:
-    cfg = SCENARIOS[scenario]
-    random.seed(seed)
-    np.random.seed(seed)
-
-    res = RES_INIT
-    base_inflow = 4.8 * cfg["inflow_mult"]
-    k = BASE_K.copy()
-    if cfg["leak_zone"] is not None:
-        k[cfg["leak_zone"]] *= cfg["leak_mult"]
-
-    series = {
-        "reservoir": [],
-        "leakage_total": [],
-        "pressure_mean": [],
-        "pressure_baseline": [],
-        "pressure_agent": [],
-        "hospital_met": [],
-    }
-    network = {
-        "valves": [],
-        "pressures": [],
-        "delivered": [],
-        "demands": [],
-        "leak": [],
-    }
-    total_leak = total_delivered = 0.0
-    hospital_demand = hospital_met = 0.0
-    offpeak_pressures: list[float] = []
-    autonomy_hit: int | None = None
-
-    for h in range(hours):
-        prof = demand_profile(h)
-        noise = 1.0 + random.uniform(-0.08, 0.08)
-        demands = ZONE_WEIGHT * prof * noise * 0.95
-
-        if policy == "agent":
-            st = discretize_state(res, h, float(demands.sum()))
-            a = int(np.argmax(Q[st]))
-            hv, ov = decode_action(a)
-            valves = valve_vector(hv, ov)
-        elif policy == "baseline":
-            valves = valve_vector(*BASELINE_VALVES)
-
-        head = 8.0 + 42.0 * (res / RES_CAPACITY)
-        pressures = head * valves / np.sqrt(0.6 + demands / 6.0)
-        pressures = np.clip(pressures, 5.0, 55.0)
-
-        leak = k * (pressures ** FAVAD_EXP)
-        supply_cap = valves * (res / RES_CAPACITY) * 6.5
-        delivered = np.minimum(demands, supply_cap)
-        res = res + base_inflow - float(delivered.sum()) - float(leak.sum())
-        res = max(0.0, min(RES_CAPACITY, res))
-
-        total_leak += float(leak.sum())
-        total_delivered += float(delivered.sum())
-        hospital_demand += float(demands[HOSPITAL_IDX])
-        hospital_met += float(delivered[HOSPITAL_IDX])
-
-        is_offpeak = not (6 <= (h % 24) <= 22)
-        if is_offpeak:
-            offpeak_pressures.append(float(pressures.mean()))
-
-        if autonomy_hit is None and res <= CRITICAL_RES:
-            autonomy_hit = h
-
-        series["reservoir"].append(round(res, 3))
-        series["leakage_total"].append(round(float(leak.sum()), 4))
-        series["pressure_mean"].append(round(float(pressures.mean()), 3))
-        if policy == "baseline":
-            series["pressure_baseline"].append(round(float(pressures.mean()), 3))
-        else:
-            series["pressure_agent"].append(round(float(pressures.mean()), 3))
-
-        network["valves"].append([round(float(v), 3) for v in valves])
-        network["pressures"].append([round(float(p), 3) for p in pressures])
-        network["delivered"].append([round(float(d), 3) for d in delivered])
-        network["demands"].append([round(float(d), 3) for d in demands])
-        network["leak"].append([round(float(l), 4) for l in leak])
-
-    autonomy_days = (autonomy_hit or hours) / 24.0
-    hosp_rel = 100.0 * hospital_met / hospital_demand if hospital_demand else 0.0
-    mean_offpeak = float(np.mean(offpeak_pressures)) if offpeak_pressures else 0.0
-
-    return {
-        "total_leakage": total_leak,
-        "hospital_reliability_pct": round(hosp_rel, 2),
-        "mean_offpeak_pressure_m": round(mean_offpeak, 2),
-        "autonomy_days": round(autonomy_days, 1),
-        "series": series,
-        "network": network,
-    }
+def warmup_cache() -> None:
+    for scenario in SCENARIOS:
+        for hour in range(HOURS):
+            snapshot(scenario, hour, BASELINE_SETTING)
+            for a in range(N_ACTIONS):
+                snapshot(scenario, hour, decode_action(a))
 
 
-def step_reward(
-    res: float,
-    hour: int,
-    demands: np.ndarray,
-    delivered: np.ndarray,
-    pressures: np.ndarray,
-    leak: np.ndarray,
-) -> float:
-    leak_pen = -0.35 * float(leak.sum())
-    hosp_short = float(max(0.0, demands[HOSPITAL_IDX] - delivered[HOSPITAL_IDX]))
-    hosp_pen = -18.0 * hosp_short
-    t = hour % 24
-    offpeak = t < 6 or t > 22
-    press_pen = 0.0
-    if offpeak:
-        excess = max(0.0, float(pressures.mean()) - OFFPEAK_PRESS_LIMIT)
-        press_pen = -2.5 * excess
-    reserve_bonus = 0.22 * (res / RES_CAPACITY)
-    return leak_pen + hosp_pen + press_pen + reserve_bonus
-
-
-def train_q(scenario: str = "normal") -> list[float]:
-    alpha, gamma = 0.22, 0.92
+def train_q(scenario: str) -> tuple[np.ndarray, list[float]]:
+    random.seed(SEED)
+    np.random.seed(SEED)
+    q = np.zeros((N_STATES, N_ACTIONS), dtype=np.float64)
+    alpha, gamma = 0.18, 0.95
     eps = 1.0
-    rewards_curve: list[float] = []
-    cfg = SCENARIOS[scenario]
-    k_base = BASE_K.copy()
+    curve: list[float] = []
 
-    for ep in range(TRAIN_EPISODES):
-        res = RES_INIT + random.uniform(-6, 6)
-        base_inflow = 4.8 * cfg["inflow_mult"]
-        k = k_base.copy()
-        if cfg["leak_zone"] is not None:
-            k[cfg["leak_zone"]] *= cfg["leak_mult"]
+    for _ in range(TRAIN_EPISODES):
         ep_reward = 0.0
-
-        for h in range(TRAIN_HOURS):
-            prof = demand_profile(h)
-            noise = 1.0 + random.uniform(-0.08, 0.08)
-            demands = ZONE_WEIGHT * prof * noise * 0.95
-            st = discretize_state(res, h, float(demands.sum()))
-
+        for hour in range(HOURS):
+            base = snapshot(scenario, hour, BASELINE_SETTING)
+            st = state_from_hour(hour, base)
             if random.random() < eps:
                 a = random.randint(0, N_ACTIONS - 1)
             else:
-                a = int(np.argmax(Q[st]))
-
-            hv, ov = decode_action(a)
-            valves = valve_vector(hv, ov)
-            head = 8.0 + 42.0 * (res / RES_CAPACITY)
-            pressures = head * valves / np.sqrt(0.6 + demands / 6.0)
-            pressures = np.clip(pressures, 5.0, 55.0)
-            leak = k * (pressures ** FAVAD_EXP)
-            supply_cap = valves * (res / RES_CAPACITY) * 6.5
-            delivered = np.minimum(demands, supply_cap)
-
-            res = res + base_inflow - float(delivered.sum()) - float(leak.sum())
-            res = max(0.0, min(RES_CAPACITY, res))
-
-            r = step_reward(res, h, demands, delivered, pressures, leak)
+                a = int(np.argmax(q[st]))
+            settings = decode_action(a)
+            r = step_reward(scenario, hour, settings)
             ep_reward += r
-
-            st2 = discretize_state(res, h + 1, float(demands.sum()))
-            best = float(np.max(Q[st2]))
-            Q[st, a] += alpha * (r + gamma * best - Q[st, a])
-
-        rewards_curve.append(round(ep_reward, 2))
-        eps = max(0.04, eps * 0.965)
-
-    return rewards_curve
+            st2 = state_from_hour((hour + 1) % HOURS, base)
+            q[st, a] += alpha * (r + gamma * float(np.max(q[st2])) - q[st, a])
+        curve.append(round(ep_reward, 3))
+        eps = max(0.05, eps * 0.97)
+    return q, curve
 
 
-def train_all_scenario_tables():
-    curves: dict[str, list[float]] = {}
-    tables: dict[str, np.ndarray] = {}
+def train_all() -> None:
+    warmup_cache()
     for name in SCENARIOS:
-        Q[:] = 0
-        curves[name] = train_q(name)
-        tables[name] = Q.copy()
-    Q[:] = tables["normal"]
-    return {"curves": curves, "tables": tables}
+        q, curve = train_q(name)
+        Q_TABLES[name] = q
+        TRAIN_CURVES[name] = curve
 
 
-TRAINING = train_all_scenario_tables()
+train_all()
 
-app = FastAPI(title="AquaMind", version="1.0.0")
+app = FastAPI(title="AquaMind", version="2.0.0")
+TOPOLOGY = network_topology()
+
+
+def series_from_run(run: dict) -> dict:
+    hourly = run["hourly"]
+    return {
+        "leakage_total": [round(h["total_leakage"], 5) for h in hourly],
+        "pressure_mean": [round(h["mean_pressure"], 3) for h in hourly],
+        "pressure_min": [round(h["min_pressure"], 3) for h in hourly],
+        "violations": [h["violations"] for h in hourly],
+        "prv01": [h["prv_settings"]["PRV01"] for h in hourly],
+        "prv31": [h["prv_settings"]["PRV31"] for h in hourly],
+        "prv25": [h["prv_settings"]["PRV25"] for h in hourly],
+        "critical_pressure": [round(h["pressures"][CRITICAL_NODE], 3) for h in hourly],
+        "pressures": hourly[-1]["pressures"],
+        "leakage_nodes": hourly[-1]["leakage"],
+        "pipe_flow": hourly[-1]["pipe_flow"],
+        "hourly_detail": hourly,
+    }
 
 
 @app.get("/")
@@ -258,67 +139,95 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "product": "AquaMind"}
+    return {"status": "ok", "engine": "wntr", "inp": "jowitt_negm.inp"}
+
+
+@app.get("/api/topology")
+def topology():
+    return TOPOLOGY
 
 
 @app.get("/api/simulate")
-def simulate(scenario: str = Query("normal", pattern="^(normal|drought|leak)$")):
-    global Q
+def simulate(scenario: str = Query("background", pattern="^(background|burst)$")):
     if scenario not in SCENARIOS:
         return JSONResponse({"error": "unknown scenario"}, status_code=400)
 
-    Q[:] = TRAINING["tables"][scenario]
-    baseline = run_sim(scenario, "baseline", HOURS, seed=11)
-    agent = run_sim(scenario, "agent", HOURS, seed=11)
+    q = Q_TABLES[scenario]
+    baseline = run_episode(scenario, "baseline", None, N_STATES, N_ACTIONS, state_from_hour, SEED)
+    agent = run_episode(scenario, "agent", q, N_STATES, N_ACTIONS, state_from_hour, SEED)
 
-    base_leak = baseline["total_leakage"]
-    agent_leak = agent["total_leakage"]
-    reduction = 0.0 if base_leak <= 0 else 100.0 * (base_leak - agent_leak) / base_leak
+    negm_rows = NEGM_BACKGROUND if scenario == "background" else NEGM_BURST
+    comparison_note = (
+        "indicative — see README Differences from Negm (2024); tabular Q-learning, "
+        f"PRV levels {list(SETPOINT_LEVELS)} m, {TRAIN_EPISODES} training episodes vs thesis DRL/benchmarks."
+    )
 
-    # merge pressure series for chart
-    pressure_chart = {
-        "labels": list(range(HOURS)),
-        "baseline": baseline["series"]["pressure_baseline"],
-        "agent": agent["series"]["pressure_agent"],
-    }
+    base_series = series_from_run(baseline)
+    agent_series = series_from_run(agent)
 
     return {
         "scenario": scenario,
         "hours": HOURS,
+        "topology": TOPOLOGY,
+        "meta": {
+            "baseline_prv_m": list(BASELINE_SETTING),
+            "pressure_limits_m": [10, 70],
+            "prv_action_levels_m": list(SETPOINT_LEVELS),
+            "critical_node_assumption": {
+                "node": CRITICAL_NODE,
+                "label": "Critical node (assumed high-demand / hospital proxy — not part of benchmark)",
+            },
+            "seed": SEED,
+        },
         "kpis": {
             "baseline": {
-                "water_loss_m3": round(base_leak, 2),
-                "hospital_reliability_pct": baseline["hospital_reliability_pct"],
-                "mean_offpeak_pressure_m": baseline["mean_offpeak_pressure_m"],
-                "autonomy_days": baseline["autonomy_days"],
+                "total_leakage_ls": round(baseline["total_leakage"], 4),
+                "water_saved_pct": 0.0,
+                "violations": baseline["violations"],
+                "mean_pressure_m": round(baseline["mean_pressure"], 2),
+                "min_pressure_m": round(baseline["min_pressure"], 2),
+                "critical_min_pressure_m": round(baseline["critical_min_pressure"], 2),
             },
             "agent": {
-                "water_loss_m3": round(agent_leak, 2),
-                "hospital_reliability_pct": agent["hospital_reliability_pct"],
-                "mean_offpeak_pressure_m": agent["mean_offpeak_pressure_m"],
-                "autonomy_days": agent["autonomy_days"],
+                "total_leakage_ls": round(agent["total_leakage"], 4),
+                "water_saved_pct": round(agent["water_saved_pct"], 2),
+                "violations": agent["violations"],
+                "mean_pressure_m": round(agent["mean_pressure"], 2),
+                "min_pressure_m": round(agent["min_pressure"], 2),
+                "critical_min_pressure_m": round(agent["critical_min_pressure"], 2),
             },
             "delta": {
-                "water_loss_reduction_pct": round(reduction, 2),
-                "hospital_reliability_gain_pct": round(
-                    agent["hospital_reliability_pct"] - baseline["hospital_reliability_pct"], 2
-                ),
+                "leakage_reduction_pct": round(agent["water_saved_pct"], 2),
+                "violation_delta": agent["violations"] - baseline["violations"],
+            },
+        },
+        "benchmark_comparison": {
+            "source": "Negm (2024) Lancaster PhD thesis — Table 5-4 (background) / Table 6-2 (burst)",
+            "citation": "https://eprints.lancs.ac.uk/id/eprint/217610/",
+            "note": comparison_note,
+            "negm": negm_rows,
+            "aquamind_qlearning": {
+                "water_saved_pct": round(agent["water_saved_pct"], 2),
+                "violations": agent["violations"],
             },
         },
         "charts": {
-            "reservoir": {
-                "baseline": baseline["series"]["reservoir"],
-                "agent": agent["series"]["reservoir"],
-            },
             "leakage": {
-                "baseline": baseline["series"]["leakage_total"],
-                "agent": agent["series"]["leakage_total"],
+                "baseline": base_series["leakage_total"],
+                "agent": agent_series["leakage_total"],
             },
-            "pressure": pressure_chart,
-            "training_reward": TRAINING["curves"][scenario],
+            "pressure": {
+                "baseline": base_series["pressure_mean"],
+                "agent": agent_series["pressure_mean"],
+            },
+            "violations": {
+                "baseline": base_series["violations"],
+                "agent": agent_series["violations"],
+            },
+            "training_reward": TRAIN_CURVES[scenario],
             "network": {
-                "baseline": baseline["network"],
-                "agent": agent["network"],
+                "baseline": base_series,
+                "agent": agent_series,
             },
         },
     }
@@ -327,4 +236,4 @@ def simulate(scenario: str = Query("normal", pattern="^(normal|drought|leak)$"))
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8765, reload=False)
