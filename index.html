@@ -1,1 +1,469 @@
-<!PLACEHOLDER_FULL_INDEX>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AquaMind — Autonomous Water Operations</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['DM Sans', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { background: linear-gradient(165deg, #0f172a 0%, #0c4a6e 45%, #0f172a 100%); min-height: 100vh; }
+    .glass { background: rgba(15, 23, 42, 0.72); backdrop-filter: blur(12px); border: 1px solid rgba(148, 163, 184, 0.15); }
+    .chart-box { height: 260px; }
+    .flow-line { stroke-dasharray: 8 10; animation: flowDash 1.2s linear infinite; }
+    @keyframes flowDash { to { stroke-dashoffset: -36; } }
+    @keyframes leakPulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.15); } }
+    .leak-dot { animation: leakPulse 1.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+    #resFill { transform-box: fill-box; transform-origin: bottom center; }
+  </style>
+</head>
+<body class="text-slate-100 font-sans antialiased">
+  <header class="border-b border-white/10 glass sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-teal-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3c4 8 8 8 8 13a8 8 0 11-16 0c0-5 4-5 8-13z"/></svg>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">AquaMind</h1>
+          <p class="text-xs text-slate-400">Q-Learning control for resilient water networks</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="text-sm text-slate-400">Scenario</label>
+        <select id="scenario" class="glass rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none">
+          <option value="normal">Normal operations</option>
+          <option value="drought">Drought (reduced inflow)</option>
+          <option value="leak">Pipe leak (Industrial zone)</option>
+        </select>
+        <button id="runBtn" class="bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-semibold px-5 py-2 rounded-lg text-sm transition shadow-lg shadow-cyan-500/25">
+          Run simulation
+        </button>
+        <span id="status" class="text-xs text-slate-500">Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Water loss reduction</p>
+        <p class="text-3xl font-bold text-emerald-400"><span id="kpiLoss">—</span><span class="text-lg">%</span></p>
+        <p class="text-xs text-slate-500 mt-2">AI vs static SCADA baseline</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Hospital supply reliability</p>
+        <p class="text-3xl font-bold text-cyan-300"><span id="kpiHosp">—</span><span class="text-lg">%</span></p>
+        <p class="text-xs text-slate-500 mt-2">Agent · baseline <span id="kpiHospBase">—</span>%</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Mean off-peak pressure</p>
+        <p class="text-3xl font-bold text-sky-300"><span id="kpiPress">—</span><span class="text-lg"> m</span></p>
+        <p class="text-xs text-slate-500 mt-2">Target &lt; 25 m · baseline <span id="kpiPressBase">—</span> m</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Reservoir autonomy</p>
+        <p class="text-3xl font-bold text-teal-300"><span id="kpiAuto">—</span><span class="text-lg"> days</span></p>
+        <p class="text-xs text-slate-500 mt-2">Until critical level · baseline <span id="kpiAutoBase">—</span> d</p>
+      </article>
+    </section>
+
+    <section class="glass rounded-2xl p-4 md:p-5">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-200">Live network flow</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Hourly mass balance · valves · FAVAD leaks · zone delivery</p>
+        </div>
+        <div class="policy-toggle inline-flex rounded-lg border border-white/10 overflow-hidden text-xs">
+          <button type="button" id="polBaseline" class="active px-3 py-1.5 border-r border-white/10 text-slate-300 hover:bg-white/5">Baseline</button>
+          <button type="button" id="polAgent" class="px-3 py-1.5 text-slate-300 hover:bg-white/5">Q-Learning agent</button>
+        </div>
+      </div>
+      <div class="w-full overflow-x-auto rounded-xl bg-slate-900/40 border border-white/5 p-2">
+        <svg id="networkSvg" viewBox="0 0 920 380" class="w-full min-w-[640px] h-auto" aria-label="Water distribution network">
+          <defs>
+            <linearGradient id="resGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.9"/>
+              <stop offset="100%" stop-color="#0891b2" stop-opacity="0.85"/>
+            </linearGradient>
+          </defs>
+          <g id="pipesLayer"></g>
+          <g transform="translate(95,190)">
+            <rect x="-52" y="-70" width="104" height="140" rx="10" fill="#0f172a" stroke="#475569" stroke-width="2"/>
+            <rect id="resFill" x="-46" y="-64" width="92" height="128" rx="6" fill="url(#resGrad)" style="transform-origin: center bottom; transform: scaleY(0.82)"/>
+            <text y="-82" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600">Reservoir</text>
+            <text id="resPct" y="88" text-anchor="middle" fill="#67e8f9" font-size="11">82%</text>
+          </g>
+          <g id="zonesLayer"></g>
+        </svg>
+      </div>
+      <div class="mt-4 flex flex-col gap-3">
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <button id="playBtn" type="button" class="glass rounded-lg px-3 py-1.5 text-cyan-300 hover:bg-white/5">▶ Play</button>
+          <label class="text-slate-400 text-xs">Speed</label>
+          <select id="playSpeed" class="glass rounded-lg px-2 py-1 text-xs text-white outline-none">
+            <option value="1">1×</option>
+            <option value="4">4×</option>
+            <option value="16">16×</option>
+          </select>
+          <span id="timeLabel" class="text-cyan-200 font-medium tabular-nums ml-auto">Day 1, 00:00</span>
+        </div>
+        <input id="hourSlider" type="range" min="0" max="719" value="0" class="w-full accent-cyan-500" />
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Reservoir storage level</h2>
+        <div class="chart-box"><canvas id="chartRes"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">System leakage (FAVAD model)</h2>
+        <div class="chart-box"><canvas id="chartLeak"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Mean zone pressure — baseline vs agent</h2>
+        <div class="chart-box"><canvas id="chartPress"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Q-learning training reward (startup)</h2>
+        <div class="chart-box"><canvas id="chartTrain"></canvas></div>
+      </div>
+    </section>
+
+    <footer class="text-center text-xs text-slate-500 pb-8">
+      Simulated mass-balance network · 5 zones incl. Hospital · Tabular Q-learning · Not EPANET
+    </footer>
+  </main>
+
+  <script>
+    const ZONE_NAMES = ['North', 'Central', 'Industrial', 'Residential', 'Hospital'];
+    const ZONE_POS = [
+      { x: 420, y: 55, pri: false },
+      { x: 680, y: 95, pri: false },
+      { x: 820, y: 190, pri: false },
+      { x: 680, y: 285, pri: false },
+      { x: 420, y: 325, pri: true },
+    ];
+    const RES_POINT = { x: 95, y: 190 };
+    const RES_CAPACITY = 100;
+
+    let simData = null;
+    let charts = {};
+    let networkPolicy = 'baseline';
+    let playbackHour = 0;
+    let playing = false;
+    let playTimer = null;
+    let flowMaxDelivered = 1;
+
+    const scrubPlugin = {
+      id: 'scrubLine',
+      afterDraw(chart) {
+        if (simData == null || chart.canvas.id === 'chartTrain') return;
+        const { ctx, chartArea } = chart;
+        if (!chartArea) return;
+        const frac = playbackHour / Math.max(1, simData.hours - 1);
+        const x = chartArea.left + frac * (chartArea.right - chartArea.left);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(34, 211, 238, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+        ctx.restore();
+      },
+    };
+    Chart.register(scrubPlugin);
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+      scales: {
+        x: { ticks: { color: '#64748b', maxTicksLimit: 8 }, grid: { color: 'rgba(148,163,184,0.08)' } },
+        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(148,163,184,0.08)' } },
+      },
+    };
+
+    function pressureColor(p, hour) {
+      const h = hour % 24;
+      const offpeak = h < 6 || h > 22;
+      if (offpeak && p > 25) return '#f87171';
+      if (p > 22) return '#fbbf24';
+      if (p > 10) return '#2dd4bf';
+      return '#38bdf8';
+    }
+
+    function formatHourLabel(h) {
+      const day = Math.floor(h / 24) + 1;
+      const hh = h % 24;
+      return `Day ${day}, ${String(hh).padStart(2, '0')}:00`;
+    }
+
+    function buildNetworkDom() {
+      const pipes = document.getElementById('pipesLayer');
+      const zones = document.getElementById('zonesLayer');
+      pipes.innerHTML = '';
+      zones.innerHTML = '';
+      ZONE_NAMES.forEach((name, i) => {
+        const z = ZONE_POS[i];
+        const gid = `zone-${i}`;
+        const pathD = `M ${RES_POINT.x} ${RES_POINT.y} Q ${(RES_POINT.x + z.x) / 2} ${(RES_POINT.y + z.y) / 2 - 20} ${z.x} ${z.y}`;
+        pipes.insertAdjacentHTML('beforeend', `
+          <path d="${pathD}" fill="none" stroke="#334155" stroke-width="10" stroke-linecap="round" opacity="0.5"/>
+          <path id="pipe-bg-${i}" d="${pathD}" fill="none" stroke="#1e293b" stroke-width="6" stroke-linecap="round"/>
+          <path id="pipe-flow-${i}" class="flow-line" d="${pathD}" fill="none" stroke="#22d3ee" stroke-width="4" stroke-linecap="round"/>
+          <g id="valve-${i}" transform="translate(0,0)">
+            <circle r="9" fill="#0f172a" stroke="#94a3b8" stroke-width="1.5"/>
+            <line x1="-5" y1="0" x2="5" y2="0" stroke="#e2e8f0" stroke-width="2"/>
+            <text id="valve-txt-${i}" y="22" text-anchor="middle" fill="#94a3b8" font-size="9">65%</text>
+          </g>
+          <circle id="leak-${i}" class="leak-dot" r="4" fill="#fb923c" opacity="0.5"/>
+        `);
+        const priRing = z.pri
+          ? `<circle r="34" fill="none" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 3"/><text y="-42" fill="#f9a8d4" font-size="9" text-anchor="middle">PRIORITY</text>`
+          : '';
+        zones.insertAdjacentHTML('beforeend', `
+          <g id="${gid}" transform="translate(${z.x}, ${z.y})">
+            ${priRing}
+            <rect x="-38" y="-28" width="76" height="56" rx="10" fill="#0f172a" stroke="${z.pri ? '#f472b6' : '#475569'}" stroke-width="1.5"/>
+            <text y="-8" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">${name}</text>
+            <rect x="-30" y="2" width="60" height="8" rx="2" fill="#1e293b"/>
+            <rect id="zone-bar-${i}" x="-30" y="2" width="30" height="8" rx="2" fill="#22d3ee"/>
+            <text id="zone-del-${i}" y="22" text-anchor="middle" fill="#64748b" font-size="8">— / —</text>
+            <text id="zone-press-${i}" y="-18" text-anchor="middle" fill="#67e8f9" font-size="9">— m</text>
+          </g>
+        `);
+      });
+    }
+
+    function pointOnQuadratic(t, p0, p1, p2) {
+      const mt = 1 - t;
+      return {
+        x: mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x,
+        y: mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y,
+      };
+    }
+
+    function pipeControl(i) {
+      const z = ZONE_POS[i];
+      return {
+        p0: RES_POINT,
+        p1: { x: (RES_POINT.x + z.x) / 2, y: (RES_POINT.y + z.y) / 2 - 20 },
+        p2: { x: z.x, y: z.y },
+      };
+    }
+
+    function updateNetworkView(hour) {
+      if (!simData) return;
+      playbackHour = hour;
+      document.getElementById('hourSlider').value = hour;
+      document.getElementById('timeLabel').textContent = formatHourLabel(hour);
+
+      const net = simData.charts.network[networkPolicy];
+      const resSeries = simData.charts.reservoir[networkPolicy];
+      const resLevel = resSeries[hour] ?? 0;
+      const pct = Math.max(0, Math.min(100, (resLevel / RES_CAPACITY) * 100));
+      document.getElementById('resFill').style.transform = `scaleY(${(pct / 100).toFixed(3)})`;
+      document.getElementById('resPct').textContent = `${pct.toFixed(1)}%`;
+
+      ZONE_NAMES.forEach((_, i) => {
+        const v = net.valves[hour][i];
+        const p = net.pressures[hour][i];
+        const dem = net.demands[hour][i];
+        const del = net.delivered[hour][i];
+        const lk = net.leak[hour][i];
+        const col = pressureColor(p, hour);
+        const flowEl = document.getElementById(`pipe-flow-${i}`);
+        const speed = 0.4 + (del / flowMaxDelivered) * 2.2;
+        flowEl.setAttribute('stroke', col);
+        flowEl.style.strokeWidth = `${2 + (del / flowMaxDelivered) * 5}`;
+        flowEl.style.animationDuration = `${Math.max(0.25, 1.6 / speed)}s`;
+
+        const ctrl = pipeControl(i);
+        const valvePt = pointOnQuadratic(0.38, ctrl.p0, ctrl.p1, ctrl.p2);
+        const leakPt = pointOnQuadratic(0.72, ctrl.p0, ctrl.p1, ctrl.p2);
+        document.getElementById(`valve-${i}`).setAttribute('transform', `translate(${valvePt.x}, ${valvePt.y})`);
+        document.getElementById(`valve-txt-${i}`).textContent = `${Math.round(v * 100)}%`;
+        const leakEl = document.getElementById(`leak-${i}`);
+        leakEl.setAttribute('cx', leakPt.x);
+        leakEl.setAttribute('cy', leakPt.y);
+        const leakR = 3 + (lk / flowMaxDelivered) * 14;
+        leakEl.setAttribute('r', leakR.toFixed(1));
+        leakEl.setAttribute('opacity', Math.min(1, 0.25 + lk * 0.8));
+
+        const ratio = dem > 0 ? del / dem : 0;
+        document.getElementById(`zone-bar-${i}`).setAttribute('width', (60 * ratio).toFixed(1));
+        document.getElementById(`zone-del-${i}`).textContent = `${del.toFixed(2)} / ${dem.toFixed(2)} m³/h`;
+        document.getElementById(`zone-press-${i}`).textContent = `${p.toFixed(1)} m`;
+      });
+
+      ['chartRes', 'chartLeak', 'chartPress'].forEach((id) => charts[id]?.update('none'));
+    }
+
+    function computeFlowMax() {
+      flowMaxDelivered = 0.01;
+      if (!simData) return;
+      ['baseline', 'agent'].forEach((pol) => {
+        simData.charts.network[pol].delivered.forEach((row) => {
+          row.forEach((d) => { if (d > flowMaxDelivered) flowMaxDelivered = d; });
+        });
+        simData.charts.network[pol].leak.forEach((row) => {
+          row.forEach((d) => { if (d > flowMaxDelivered) flowMaxDelivered = d; });
+        });
+      });
+    }
+
+    function setPolicy(pol) {
+      networkPolicy = pol;
+      document.getElementById('polBaseline').classList.toggle('active', pol === 'baseline');
+      document.getElementById('polAgent').classList.toggle('active', pol === 'agent');
+      updateNetworkView(playbackHour);
+    }
+
+    function stopPlayback() {
+      playing = false;
+      document.getElementById('playBtn').textContent = '▶ Play';
+      if (playTimer) clearInterval(playTimer);
+      playTimer = null;
+    }
+
+    function startPlayback() {
+      stopPlayback();
+      playing = true;
+      document.getElementById('playBtn').textContent = '⏸ Pause';
+      const mult = Number(document.getElementById('playSpeed').value);
+      const ms = Math.max(20, 220 / mult);
+      playTimer = setInterval(() => {
+        let h = playbackHour + 1;
+        if (h >= simData.hours) h = 0;
+        updateNetworkView(h);
+      }, ms);
+    }
+
+    function makeChart(id, labels, datasets, yLabel) {
+      const ctx = document.getElementById(id).getContext('2d');
+      if (charts[id]) charts[id].destroy();
+      charts[id] = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          ...chartDefaults,
+          animation: false,
+          scales: {
+            ...chartDefaults.scales,
+            y: { ...chartDefaults.scales.y, title: yLabel ? { display: true, text: yLabel, color: '#64748b' } : undefined },
+          },
+        },
+      });
+    }
+
+    function downsample(arr, n = 120) {
+      if (arr.length <= n) return arr;
+      const step = Math.floor(arr.length / n);
+      return arr.filter((_, i) => i % step === 0);
+    }
+
+    function downsampleLabels(len, n = 120) {
+      return Array.from({ length: len }, (_, i) => i).filter((_, i) => i % Math.max(1, Math.floor(len / n)) === 0);
+    }
+
+    async function runSim() {
+      const scenario = document.getElementById('scenario').value;
+      const status = document.getElementById('status');
+      const btn = document.getElementById('runBtn');
+      stopPlayback();
+      status.textContent = 'Running…';
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/simulate?scenario=${scenario}`);
+        if (!res.ok) throw new Error('Simulation failed');
+        simData = await res.json();
+        const k = simData.kpis;
+        document.getElementById('kpiLoss').textContent = k.delta.water_loss_reduction_pct.toFixed(1);
+        document.getElementById('kpiHosp').textContent = k.agent.hospital_reliability_pct.toFixed(1);
+        document.getElementById('kpiHospBase').textContent = k.baseline.hospital_reliability_pct.toFixed(1);
+        document.getElementById('kpiPress').textContent = k.agent.mean_offpeak_pressure_m.toFixed(1);
+        document.getElementById('kpiPressBase').textContent = k.baseline.mean_offpeak_pressure_m.toFixed(1);
+        document.getElementById('kpiAuto').textContent = k.agent.autonomy_days.toFixed(1);
+        document.getElementById('kpiAutoBase').textContent = k.baseline.autonomy_days.toFixed(1);
+
+        document.getElementById('hourSlider').max = simData.hours - 1;
+        computeFlowMax();
+
+        const labels = downsampleLabels(simData.hours);
+        const ds = (name, dataArr, color) => ({
+          label: name,
+          data: downsample(dataArr),
+          borderColor: color,
+          backgroundColor: color + '22',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.25,
+        });
+
+        makeChart('chartRes', labels, [
+          ds('Baseline', simData.charts.reservoir.baseline, '#f87171'),
+          ds('Q-Learning agent', simData.charts.reservoir.agent, '#22d3ee'),
+        ], 'Level (%)');
+        makeChart('chartLeak', labels, [
+          ds('Baseline', simData.charts.leakage.baseline, '#fb923c'),
+          ds('Q-Learning agent', simData.charts.leakage.agent, '#34d399'),
+        ], 'm³/h');
+        makeChart('chartPress', labels, [
+          ds('Baseline', simData.charts.pressure.baseline, '#a78bfa'),
+          ds('Q-Learning agent', simData.charts.pressure.agent, '#38bdf8'),
+        ], 'Head (m)');
+        const tr = simData.charts.training_reward;
+        makeChart('chartTrain', tr.map((_, i) => i + 1), [
+          { label: 'Episode reward', data: tr, borderColor: '#fbbf24', backgroundColor: '#fbbf2422', borderWidth: 2, pointRadius: 0, tension: 0.2 },
+        ], 'Reward');
+
+        updateNetworkView(0);
+        status.textContent = `Completed · ${scenario}`;
+      } catch (e) {
+        console.error(e);
+        status.textContent = 'Error — see console';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    buildNetworkDom();
+    document.getElementById('runBtn').addEventListener('click', runSim);
+    document.getElementById('polBaseline').addEventListener('click', () => setPolicy('baseline'));
+    document.getElementById('polAgent').addEventListener('click', () => setPolicy('agent'));
+    document.getElementById('hourSlider').addEventListener('input', (e) => {
+      stopPlayback();
+      updateNetworkView(Number(e.target.value));
+    });
+    document.getElementById('playBtn').addEventListener('click', () => {
+      if (playing) stopPlayback();
+      else if (simData) startPlayback();
+    });
+    document.getElementById('playSpeed').addEventListener('change', () => {
+      if (playing) startPlayback();
+    });
+
+    const q = new URLSearchParams(location.search).get('scenario');
+    if (q && document.querySelector(`#scenario option[value="${q}"]`)) {
+      document.getElementById('scenario').value = q;
+    }
+    runSim();
+  </script>
+</body>
+</html>
