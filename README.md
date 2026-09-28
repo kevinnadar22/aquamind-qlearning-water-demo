@@ -1,57 +1,60 @@
-# AquaMind — Autonomous Water Infrastructure (Q-Learning Demo)
+# AquaMind — Jowitt & Xu Q-Learning Water Demo
 
-Minimal demo web app for the mini-project **Autonomous Water Infrastructure Management via Q-Learning** (K.J. Somaiya — Group 24). It simulates hourly mass-balance control of a small multi-zone network (including a **Hospital** priority zone) and compares a **static SCADA baseline** to a **tabular Q-learning agent**.
+Tabular Q-learning pressure management on the **Jowitt & Xu (1990)** benchmark network, hydraulics via **[WNTR](https://github.com/USEPA/WNTR)** (EPANET 2.2), aligned with **Negm (2024)** (*Water Pressure Optimisation for Leakage Management Using Deep Reinforcement Learning*, Lancaster University, [eprint](https://eprints.lancs.ac.uk/id/eprint/217610/)).
 
-## Stack
+Public mirror: [github.com/kevinnadar22/aquamind-qlearning-water-demo](https://github.com/kevinnadar22/aquamind-qlearning-water-demo)
 
-- **Backend:** one FastAPI file (`main.py`) — simulation, Q-learning training on startup, JSON API
-- **Frontend:** one static page (`index.html`) — Tailwind + Chart.js via CDN
-- **No** React, npm, or EPANET/WNTR
-
-## Quick start
+## Setup
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8765
 ```
 
-Or:
-
-```bash
-pip install -r requirements.txt && python3 main.py
-```
-
-Open **http://localhost:8000**. The first startup trains Q-tables for all scenarios (a few seconds).
-
-**Public repository:** https://github.com/kevinnadar22/aquamind-qlearning-water-demo
+Open `http://127.0.0.1:8765` — choose **Background leakage** or **Burst (nodes 4, 9, 11)** and click **Run**.
 
 ## Demo script (~7 steps)
 
-1. Start the server and open the dashboard. Point out the **AquaMind** header and four KPI cards (live metrics, not slides).
-2. Leave **Normal operations** selected and click **Run simulation**. Use the **Live network flow** panel: toggle Baseline vs Q-Learning, scrub the timeline or press Play, and point out pipe colors (pressure), valve % labels, and the **Hospital** priority ring.
-3. Leave **Normal** and note **water loss reduction** on the KPI cards; drag the hour slider to see the cyan **scrub line** move on the reservoir, leakage, and pressure charts.
-4. Open the **Reservoir storage** chart: the agent curve stays higher over the 30-day horizon than the fixed high-aperture baseline.
-5. Switch to **Drought (reduced inflow)** and run again. Highlight **hospital supply reliability** (baseline drops; agent prioritizes the Hospital zone via reward shaping).
-6. Switch to **Pipe leak (Industrial zone)** and run. Scrub to mid-simulation: the **Industrial** pipe shows a larger pulsing leak marker; compare agent vs baseline on leakage and autonomy KPIs.
-7. Briefly show **Q-learning training reward** (convergence on startup) and **mean off-peak pressure** under 25 m for the agent — tying back to FAVAD leakage control and pressure management objectives.
+1. Start the server (above).
+2. Run **Background leakage** — note KPI cards (leakage reduction %, violations, pressures, total leakage).
+3. Open **Benchmark comparison** — compare **AquaMind Q-learning** row to Negm Table 5-4 (same scenario).
+4. Scrub **Live network** playback — toggle **Baseline 40 m** vs **Q-learning**; watch PRV setpoints and pipe colours (10–70 m limits).
+5. Read the **Critical node** footnote (node **5** = assumed high-demand / hospital proxy, not in the benchmark).
+6. Switch to **Burst** — emitters on nodes **4, 9, 11** at **3** L·s⁻¹·m^−0.5, others **0** (Negm §6.2).
+7. Compare burst results to Negm Table 6-2 in the same comparison table.
 
-## API
+## Files
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Dashboard UI |
-| `GET /api/simulate?scenario=normal\|drought\|leak` | Full KPIs + chart series (JSON) |
-| `GET /api/health` | Health check |
+| File | Role |
+|------|------|
+| `jowitt_negm.inp` | Jowitt & Xu + PRVs on **P01, P31, P25** @ 40 m baseline; 22 background emitters (exp **1.18**); pattern **Fc**; 1 h steps |
+| `network_sim.py` | WNTR hourly snapshots, reward, episode roll-out |
+| `main.py` | Q-learning training at import (seed **42**), FastAPI `/api/simulate` |
+| `index.html` | Dashboard, network map, benchmark table |
 
-## Model (summary)
+## Citations
 
-- 1 reservoir, 5 zones (Hospital included), valve openings low/med/high
-- Demand: daily peaks + noise; leakage `L = k · P^1.18`
-- Q-learning state: reservoir level, time-of-day, demand buckets; actions: hospital + network valve presets
-- Scenarios adjust inflow (drought) or leak coefficient (pipe leak)
+- Jowitt, P., & Xu, C. (1990). *Predictive management of water distribution networks.*
+- Negm, M. (2024). *Water Pressure Optimisation for Leakage Management Using Deep Reinforcement Learning.* Lancaster University. https://eprints.lancs.ac.uk/id/eprint/217610/
+- Koşucu, G., & Demirel, S. (2022). EPANET models (CC-BY-4.0): https://doi.org/10.5281/zenodo.6243078
+- WNTR: https://github.com/USEPA/WNTR
 
-All displayed numbers come from the running simulation.
+## Differences from Negm (2024)
 
-## Team context
+| Topic | Negm (2024) | This demo |
+|--------|-------------|-----------|
+| Optimiser | DE, PSO, NM, PPO, A2C, etc. (tuned DRL, 20k timesteps) | **Tabular Q-learning**, 180 episodes, ε-greedy |
+| State | Nodal pressures / hydraulic features | **Hour of day only** (24 states) |
+| Actions | Continuous or fine discrete PRV settings in [0, 70] m | **3 levels per PRV: 25, 40, 55 m** → 27 joint actions |
+| Reward scales | Tuned 3:1 leakage:violations (Jowitt); no tanh on Jowitt | Fixed **3:1** on per-node leakage fraction + violation delta |
+| Episode metric | 3 test episodes averaged in thesis | **Single 24 h episode** per API run |
+| PRV pipe **P25** | Literature pipe P25 (13→12) | Same topology; Koşucu file used pipe **P37** — rebuilt as **P25** per Araujo/Negm |
+| Burst training | Trained on **random** burst locations, tested on fixed 4/9/11 | Q-table trained **on the same fixed burst** scenario |
+| Critical node | Not part of benchmark | Node **5** labelled as assumed critical (highest base demand) |
+| Comparison | — | Labelled **indicative** where the above applies |
 
-Maria Kevin, Sahil Khot, Krishna Modi — Guide: Prof. Pravin Patil.
+## Reproducibility
+
+All randomness uses `SEED = 42` in `main.py` (`random`, `numpy`).

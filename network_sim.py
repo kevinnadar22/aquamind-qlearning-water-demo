@@ -182,6 +182,43 @@ def run_episode(
     }
 
 
+def _coord_invalid(c: dict | None) -> bool:
+    if not c:
+        return True
+    return abs(c["x"]) < 1.0 and abs(c["y"]) < 1.0
+
+
+def _resolve_coordinates(coords: dict, pipes: list[dict]) -> dict:
+    out = {k: dict(v) for k, v in coords.items()}
+
+    def midpoint(n1: str, n2: str) -> dict | None:
+        a, b = out.get(n1), out.get(n2)
+        if not a or not b or _coord_invalid(a) or _coord_invalid(b):
+            return None
+        return {"x": (a["x"] + b["x"]) / 2, "y": (a["y"] + b["y"]) / 2}
+
+    for name, a, b in (
+        ("P01_m", "23", "1"),
+        ("P31_m", "25", "16"),
+        ("P25_m", "13", "12"),
+    ):
+        m = midpoint(a, b)
+        if m:
+            out[name] = m
+
+    for p in pipes:
+        n1, n2 = p["n1"], p["n2"]
+        if _coord_invalid(out.get(n1)) and not _coord_invalid(out.get(n2)):
+            m = midpoint(n2, n1)
+            if m:
+                out[n1] = m
+        if _coord_invalid(out.get(n2)) and not _coord_invalid(out.get(n1)):
+            m = midpoint(n1, n2)
+            if m:
+                out[n2] = m
+    return out
+
+
 def network_topology() -> dict:
     wn = _load_model()
     coords = {}
@@ -202,6 +239,7 @@ def network_topology() -> dict:
                 "valve": True,
             }
         )
+    coords = _resolve_coordinates(coords, pipes)
     prv_nodes = {"PRV01": "P01_m", "PRV31": "P31_m", "PRV25": "P25_m"}
     return {
         "coordinates": coords,
