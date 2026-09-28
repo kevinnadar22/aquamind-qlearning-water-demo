@@ -50,7 +50,8 @@ Open `http://127.0.0.1:8765` — choose **Background leakage** or **Burst (nodes
 | Actions | Continuous or fine discrete PRV settings in [0, 70] m | **3 levels per PRV: 25, 40, 55 m** → 27 joint actions |
 | Reward scales | Tuned 3:1 leakage:violations (Jowitt); no tanh on Jowitt | Fixed **3:1** on per-node leakage fraction + violation delta |
 | Episode metric | 3 test episodes averaged in thesis | **Single 24 h episode** per API run |
-| PRV pipe **P25** | Literature pipe P25 (13→12) | Same topology; Koşucu file used pipe **P37** — rebuilt as **P25** per Araujo/Negm |
+| PRV pipe **P25** | Literature pipe P25 (13→12) | Same topology; Koşucu file used pipe **P37** + valve **26→12** — rebuilt as **P25_u / PRV25** per Araujo/Negm |
+| Koşucu PRV legs **27→15**, **28→21** | Modeled as PRV links in `JX_3PRV_epanet22.inp` | Restored as open pipes **P44**, **P45** (same diameters as former valves); **P40**, **P41** retained |
 | Burst training | Trained on **random** burst locations, tested on fixed 4/9/11 | Q-table trained **on the same fixed burst** scenario |
 | Critical node | Not part of benchmark | Node **5** labelled as assumed critical (highest base demand) |
 | Comparison | — | Labelled **indicative** where the above applies |
