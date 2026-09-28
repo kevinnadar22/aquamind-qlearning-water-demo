@@ -23,14 +23,17 @@ pip install -r requirements.txt && python3 main.py
 
 Open **http://localhost:8000**. The first startup trains Q-tables for all scenarios (a few seconds).
 
-## Demo script (~6 steps)
+**Public repository:** https://github.com/kevinnadar22/aquamind-qlearning-water-demo
+
+## Demo script (~7 steps)
 
 1. Start the server and open the dashboard. Point out the **AquaMind** header and four KPI cards (live metrics, not slides).
-2. Leave **Normal operations** selected and click **Run simulation**. Note **water loss reduction** and that **hospital reliability** for the agent meets or beats the baseline.
-3. Open the **Reservoir storage** chart: the agent curve stays higher over the 30-day horizon than the fixed high-aperture baseline.
-4. Switch to **Drought (reduced inflow)** and run again. Highlight **hospital supply reliability** (baseline drops; agent prioritizes the Hospital zone via reward shaping).
-5. Switch to **Pipe leak (Industrial zone)** and run. Show lower **leakage** time series and improved **reservoir autonomy** vs baseline.
-6. Briefly show **Q-learning training reward** (convergence on startup) and **mean off-peak pressure** under 25 m for the agent — tying back to FAVAD leakage control and pressure management objectives.
+2. Leave **Normal operations** selected and click **Run simulation**. Use the **Live network flow** panel: toggle Baseline vs Q-Learning, scrub the timeline or press Play, and point out pipe colors (pressure), valve % labels, and the **Hospital** priority ring.
+3. Leave **Normal** and note **water loss reduction** on the KPI cards; drag the hour slider to see the cyan **scrub line** move on the reservoir, leakage, and pressure charts.
+4. Open the **Reservoir storage** chart: the agent curve stays higher over the 30-day horizon than the fixed high-aperture baseline.
+5. Switch to **Drought (reduced inflow)** and run again. Highlight **hospital supply reliability** (baseline drops; agent prioritizes the Hospital zone via reward shaping).
+6. Switch to **Pipe leak (Industrial zone)** and run. Scrub to mid-simulation: the **Industrial** pipe shows a larger pulsing leak marker; compare agent vs baseline on leakage and autonomy KPIs.
+7. Briefly show **Q-learning training reward** (convergence on startup) and **mean off-peak pressure** under 25 m for the agent — tying back to FAVAD leakage control and pressure management objectives.
 
 ## API
 
