@@ -1,1 +1,153 @@
-<WORKSPACE_INDEX_HTML>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AquaMind — Autonomous Water Operations</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['DM Sans', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { background: linear-gradient(165deg, #0f172a 0%, #0c4a6e 45%, #0f172a 100%); min-height: 100vh; }
+    .glass { background: rgba(15, 23, 42, 0.72); backdrop-filter: blur(12px); border: 1px solid rgba(148, 163, 184, 0.15); }
+    .chart-box { height: 260px; }
+    .flow-line { stroke-dasharray: 8 10; animation: flowDash 1.2s linear infinite; }
+    @keyframes flowDash { to { stroke-dashoffset: -36; } }
+    @keyframes leakPulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.15); } }
+    .leak-dot { animation: leakPulse 1.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+    #resFill { transform-box: fill-box; transform-origin: bottom center; }
+  </style>
+</head>
+<body class="text-slate-100 font-sans antialiased">
+  <header class="border-b border-white/10 glass sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-teal-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3c4 8 8 8 8 13a8 8 0 11-16 0c0-5 4-5 8-13z"/></svg>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">AquaMind</h1>
+          <p class="text-xs text-slate-400">Q-Learning control for resilient water networks</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="text-sm text-slate-400">Scenario</label>
+        <select id="scenario" class="glass rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-cyan-500 outline-none">
+          <option value="normal">Normal operations</option>
+          <option value="drought">Drought (reduced inflow)</option>
+          <option value="leak">Pipe leak (Industrial zone)</option>
+        </select>
+        <button id="runBtn" class="bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-semibold px-5 py-2 rounded-lg text-sm transition shadow-lg shadow-cyan-500/25">
+          Run simulation
+        </button>
+        <span id="status" class="text-xs text-slate-500">Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Water loss reduction</p>
+        <p class="text-3xl font-bold text-emerald-400"><span id="kpiLoss">—</span><span class="text-lg">%</span></p>
+        <p class="text-xs text-slate-500 mt-2">AI vs static SCADA baseline</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Hospital supply reliability</p>
+        <p class="text-3xl font-bold text-cyan-300"><span id="kpiHosp">—</span><span class="text-lg">%</span></p>
+        <p class="text-xs text-slate-500 mt-2">Agent · baseline <span id="kpiHospBase">—</span>%</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Mean off-peak pressure</p>
+        <p class="text-3xl font-bold text-sky-300"><span id="kpiPress">—</span><span class="text-lg"> m</span></p>
+        <p class="text-xs text-slate-500 mt-2">Target &lt; 25 m · baseline <span id="kpiPressBase">—</span> m</p>
+      </article>
+      <article class="glass rounded-2xl p-5">
+        <p class="text-xs uppercase tracking-wider text-slate-400 mb-1">Reservoir autonomy</p>
+        <p class="text-3xl font-bold text-teal-300"><span id="kpiAuto">—</span><span class="text-lg"> days</span></p>
+        <p class="text-xs text-slate-500 mt-2">Until critical level · baseline <span id="kpiAutoBase">—</span> d</p>
+      </article>
+    </section>
+
+    <section class="glass rounded-2xl p-4 md:p-5">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-sm font-semibold text-slate-200">Live network flow</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Hourly mass balance · valves · FAVAD leaks · zone delivery</p>
+        </div>
+        <div class="policy-toggle inline-flex rounded-lg border border-white/10 overflow-hidden text-xs">
+          <button type="button" id="polBaseline" class="active px-3 py-1.5 border-r border-white/10 text-slate-300 hover:bg-white/5">Baseline</button>
+          <button type="button" id="polAgent" class="px-3 py-1.5 text-slate-300 hover:bg-white/5">Q-Learning agent</button>
+        </div>
+      </div>
+      <div class="w-full overflow-x-auto rounded-xl bg-slate-900/40 border border-white/5 p-2">
+        <svg id="networkSvg" viewBox="0 0 920 380" class="w-full min-w-[640px] h-auto" aria-label="Water distribution network">
+          <defs>
+            <linearGradient id="resGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.9"/>
+              <stop offset="100%" stop-color="#0891b2" stop-opacity="0.85"/>
+            </linearGradient>
+          </defs>
+          <g id="pipesLayer"></g>
+          <g transform="translate(95,190)">
+            <rect x="-52" y="-70" width="104" height="140" rx="10" fill="#0f172a" stroke="#475569" stroke-width="2"/>
+            <rect id="resFill" x="-46" y="-64" width="92" height="128" rx="6" fill="url(#resGrad)" style="transform-origin: center bottom; transform: scaleY(0.82)"/>
+            <text y="-82" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600">Reservoir</text>
+            <text id="resPct" y="88" text-anchor="middle" fill="#67e8f9" font-size="11">82%</text>
+          </g>
+          <g id="zonesLayer"></g>
+        </svg>
+      </div>
+      <div class="mt-4 flex flex-col gap-3">
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <button id="playBtn" type="button" class="glass rounded-lg px-3 py-1.5 text-cyan-300 hover:bg-white/5">▶ Play</button>
+          <label class="text-slate-400 text-xs">Speed</label>
+          <select id="playSpeed" class="glass rounded-lg px-2 py-1 text-xs text-white outline-none">
+            <option value="1">1×</option>
+            <option value="4">4×</option>
+            <option value="16">16×</option>
+          </select>
+          <span id="timeLabel" class="text-cyan-200 font-medium tabular-nums ml-auto">Day 1, 00:00</span>
+        </div>
+        <input id="hourSlider" type="range" min="0" max="719" value="0" class="w-full accent-cyan-500" />
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Reservoir storage level</h2>
+        <div class="chart-box"><canvas id="chartRes"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">System leakage (FAVAD model)</h2>
+        <div class="chart-box"><canvas id="chartLeak"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Mean zone pressure — baseline vs agent</h2>
+        <div class="chart-box"><canvas id="chartPress"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-4">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3">Q-learning training reward (startup)</h2>
+        <div class="chart-box"><canvas id="chartTrain"></canvas></div>
+      </div>
+    </section>
+
+    <footer class="text-center text-xs text-slate-500 pb-8">
+      Simulated mass-balance network · 5 zones incl. Hospital · Tabular Q-learning · Not EPANET
+    </footer>
+  </main>
+
+  <script>
+    const ZONE_NAMES = ['North', 'Central', 'Industrial', 'Residential', 'Hospital'];
+    const ZONE_POS = [
+  
