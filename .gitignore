@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+temp.inp
+temp.rpt
+temp.bin
+uploads/
+.venv/
