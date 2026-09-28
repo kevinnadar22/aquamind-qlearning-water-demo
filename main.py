@@ -88,6 +88,13 @@ def run_sim(
         "pressure_agent": [],
         "hospital_met": [],
     }
+    network = {
+        "valves": [],
+        "pressures": [],
+        "delivered": [],
+        "demands": [],
+        "leak": [],
+    }
     total_leak = total_delivered = 0.0
     hospital_demand = hospital_met = 0.0
     offpeak_pressures: list[float] = []
@@ -136,6 +143,12 @@ def run_sim(
         else:
             series["pressure_agent"].append(round(float(pressures.mean()), 3))
 
+        network["valves"].append([round(float(v), 3) for v in valves])
+        network["pressures"].append([round(float(p), 3) for p in pressures])
+        network["delivered"].append([round(float(d), 3) for d in delivered])
+        network["demands"].append([round(float(d), 3) for d in demands])
+        network["leak"].append([round(float(l), 4) for l in leak])
+
     autonomy_days = (autonomy_hit or hours) / 24.0
     hosp_rel = 100.0 * hospital_met / hospital_demand if hospital_demand else 0.0
     mean_offpeak = float(np.mean(offpeak_pressures)) if offpeak_pressures else 0.0
@@ -146,6 +159,7 @@ def run_sim(
         "mean_offpeak_pressure_m": round(mean_offpeak, 2),
         "autonomy_days": round(autonomy_days, 1),
         "series": series,
+        "network": network,
     }
 
 
@@ -302,6 +316,10 @@ def simulate(scenario: str = Query("normal", pattern="^(normal|drought|leak)$"))
             },
             "pressure": pressure_chart,
             "training_reward": TRAINING["curves"][scenario],
+            "network": {
+                "baseline": baseline["network"],
+                "agent": agent["network"],
+            },
         },
     }
 
