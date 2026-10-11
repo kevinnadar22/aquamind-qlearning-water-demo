@@ -22,7 +22,7 @@ Open `http://127.0.0.1:8765` — choose **Background leakage** or **Burst (nodes
 3. Open **Benchmark comparison** — compare **AquaMind Q-learning** row to Negm Table 5-4 (same scenario).
 4. Scrub **Live network** playback — toggle **Baseline 40 m** vs **Q-learning**; watch PRV setpoints and pipe colours (10–70 m limits).
 5. Read the **Critical node** footnote (node **5** = assumed high-demand / hospital proxy, not in the benchmark).
-6. Switch to **Burst** — emitters on nodes **4, 9, 11** at **3** L·s⁻¹·m^−0.5, others **0** (Negm §6.2).
+6. Switch to **Burst** — emitters on nodes **4, 9, 11** at **3** L·s⁻¹·m^-0.5, others **0** (Negm §6.2).
 7. Compare burst results to Negm Table 6-2 in the same comparison table.
 
 ## Files
@@ -32,7 +32,17 @@ Open `http://127.0.0.1:8765` — choose **Background leakage** or **Burst (nodes
 | `jowitt_negm.inp` | Jowitt & Xu + PRVs on **P01, P31, P25** @ 40 m baseline; 22 background emitters (exp **1.18**); pattern **Fc**; 1 h steps |
 | `network_sim.py` | WNTR hourly snapshots, reward, episode roll-out |
 | `main.py` | Q-learning training at import (seed **42**), FastAPI `/api/simulate` |
+| `ppo_env.py` | Gymnasium env (24 h, obs = hour + 22 pressures + 3 PRV setpoints) |
+| `ppo_agent.py` | SB3 PPO load/save and deterministic eval |
+| `train_ppo.py` | Train PPO + light penalty sweep; writes `models/ppo_*.zip` |
 | `index.html` | Dashboard, network map, benchmark table |
+
+## PPO (Stable-Baselines3)
+
+- **Policy:** `PPO` with `MlpPolicy`, continuous actions in \([-1,1]^3\) mapped to PRV setpoints **[10, 70] m**.
+- **Observation (dim 26):** hour / 23, 22 junction pressures / 70, current 3 PRV settings / 70.
+- **Reward (per hour):** \(\sum_j 3 \cdot (L^{\mathrm{base}}_j - L_j) / L^{\mathrm{base}}_j\) minus **`vio_penalty` ×** count of nodes outside **10–70 m** (default penalty tuned toward Negm-style ~66% saved / ~46 violations on background, not the untuned 73%/300 regime).
+- **Training:** `python train_ppo.py` (uses WNTR cache for baseline snapshots; writes `models/ppo_config.json`). Server loads `models/ppo_{background|burst}.zip` if present (no PPO training on startup).
 
 ## Citations
 
@@ -45,7 +55,7 @@ Open `http://127.0.0.1:8765` — choose **Background leakage** or **Burst (nodes
 
 | Topic | Negm (2024) | This demo |
 |--------|-------------|-----------|
-| Optimiser | DE, PSO, NM, PPO, A2C, etc. (tuned DRL, 20k timesteps) | **Tabular Q-learning**, 180 episodes, ε-greedy |
+| Optimiser | DE, PSO, NM, PPO, A2C, etc. (tuned DRL, 20k timesteps) | **Tabular Q-learning** (180 ep.) + **SB3 PPO** (see `models/ppo_config.json`) |
 | State | Nodal pressures / hydraulic features | **Hour of day only** (24 states) |
 | Actions | Continuous or fine discrete PRV settings in [0, 70] m | **3 levels per PRV: 25, 40, 55 m** → 27 joint actions |
 | Reward scales | Tuned 3:1 leakage:violations (Jowitt); no tanh on Jowitt | Fixed **3:1** on per-node leakage fraction + violation delta |
