@@ -1,6 +1,7 @@
 """Stable-Baselines3 PPO training, load, and deterministic evaluation."""
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -18,13 +19,13 @@ CONFIG_PATH = MODELS_DIR / "ppo_config.json"
 # Tuned on background (penalty sweep); burst uses same hyperparameters.
 DEFAULT_PPO_HPARAMS = {
     "leak_scale": 3.0,
-    "vio_penalty": 6.0,
+    "vio_penalty": 1.5,
     "learning_rate": 3e-4,
     "n_steps": 512,
     "batch_size": 128,
     "n_epochs": 10,
     "gamma": 0.99,
-    "total_timesteps": 8000,
+    "total_timesteps": 18000,
     "seed": 42,
 }
 
@@ -67,9 +68,31 @@ def train_ppo(scenario: str, hparams: dict | None = None) -> PPO:
     return model
 
 
-def load_ppo(scenario: str) -> PPO | None:
+def _materialize_zip(scenario: str) -> Path | None:
     path = model_path(scenario)
-    if not path.exists():
+    if path.exists():
+        return path
+    b64_path = path.with_suffix(path.suffix + ".b64")
+    chunks: list[str] = []
+    if b64_path.exists():
+        chunks.append(b64_path.read_text().strip())
+    else:
+        i = 0
+        while True:
+            part = path.with_name(f"{path.name}.b64.part{i}")
+            if not part.exists():
+                break
+            chunks.append(part.read_text())
+            i += 1
+    if not chunks:
+        return None
+    path.write_bytes(base64.b64decode("".join(chunks)))
+    return path
+
+
+def load_ppo(scenario: str) -> PPO | None:
+    path = _materialize_zip(scenario)
+    if path is None:
         return None
     return PPO.load(str(path))
 
